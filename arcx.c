@@ -159,6 +159,7 @@ int add(const char* archiveFilename, const char* targetFilename) {
 
     // Check if the file already exists in the archive
     FileEntry entry;
+    int found = 0;
     while (fread(&entry, sizeof(FileEntry), 1, archiveFile) != 0) {
         if (strcmp(entry.filename, targetFilename) == 0) {
             printf("File '%s' already exists in the archive. Skipping.\n", targetFilename);
@@ -212,11 +213,13 @@ int del(const char* archiveFilename, const char* targetFilename) {
     // Search for the file entry in the archive
     FileEntry entry;
     int found = 0;
+    long offset = 0;
     while (fread(&entry, sizeof(FileEntry), 1, archiveFile) != 0) {
         if (strcmp(entry.filename, targetFilename) == 0) {
             found = 1;
             break;
         }
+        offset = ftell(archiveFile);
     }
 
     if (found) {
@@ -224,15 +227,18 @@ int del(const char* archiveFilename, const char* targetFilename) {
         int fileSize = entry.size;
 
         // Calculate the offset of the file entry
-        long offset = -sizeof(FileEntry);
+        fseek(archiveFile, offset, SEEK_SET);
 
         // Delete the file entry from the archive
-        fseek(archiveFile, offset, SEEK_CUR);
-        fwrite(&entry, sizeof(FileEntry), 1, archiveFile);
+        FileEntry emptyEntry;
+        memset(&emptyEntry, 0, sizeof(FileEntry));
+        fwrite(&emptyEntry, sizeof(FileEntry), 1, archiveFile);
 
         // Remove the file contents from the archive
         fseek(archiveFile, fileSize, SEEK_CUR);
-        fwrite("", 1, fileSize, archiveFile);
+        char emptyBuffer[1024];
+        memset(&emptyBuffer, 0, sizeof(emptyBuffer));
+        fwrite(emptyBuffer, 1, fileSize, archiveFile);
 
         printf("File '%s' deleted from the archive.\n", targetFilename);
     } else {
