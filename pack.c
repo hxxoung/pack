@@ -3,13 +3,7 @@
 #include <sys/stat.h>
 
 int main() {
-    const char* directory = "/path/to/location/new1";
-
-    struct stat st;
-    if (stat(directory, &st) == 0) {
-        printf("There is a file with the same name named 'new1'.\n");
-        return 1;
-    }
+    const char* directory = "/home/yun/sysmp_assignment2/part2/new1";
 
     int status = mkdir(directory, 0777);
 
