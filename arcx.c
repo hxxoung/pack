@@ -1,30 +1,26 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/stat.h>
-#include <unistd.h>
 #include <string.h>
-#include <dirent.h>
-#include <errno.h>
+#include <sys/stat.h>
 
-#define MAX_FILES 100
+#define MAX_FILENAME_LENGTH 256
 
 typedef struct {
-    char filename[256];
-    int size;
+    char filename[MAX_FILENAME_LENGTH];
+    long offset;
+    long size;
 } FileEntry;
 
-int pack(const char* archiveFilename, const char* srcDirectory) {
-    printf("Packing files from '%s' into archive '%s'\n", srcDirectory, archiveFilename);
-
+int pack(const char* archiveFilename, const char* directory) {
     // Open the source directory
-    DIR* dir = opendir(srcDirectory);
+    DIR* dir = opendir(directory);
     if (dir == NULL) {
-        printf("Failed to open source directory '%s'.\n", srcDirectory);
+        printf("Failed to open source directory '%s'.\n", directory);
         perror("Error");
         return 1;
     }
 
-    // Create the archive file
+    // Create a new archive file
     FILE* archiveFile = fopen(archiveFilename, "wb");
     if (archiveFile == NULL) {
         printf("Failed to create archive file '%s'.\n", archiveFilename);
@@ -33,221 +29,336 @@ int pack(const char* archiveFilename, const char* srcDirectory) {
         return 1;
     }
 
-    // Read the files in the source directory
+    // Read files from the source directory
     struct dirent* entry;
-    FileEntry entries[MAX_FILES];
-    int numFiles = 0;
-
+    int fileCount = 0;
     while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_type == DT_REG) { // Regular file
-            strcpy(entries[numFiles].filename, entry->d_name);
-
-            // Get the file size
-            char filePath[256];
-            snprintf(filePath, sizeof(filePath), "%s/%s", srcDirectory, entry->d_name);
-            struct stat st;
-            if (stat(filePath, &st) == 0)
-                entries[numFiles].size = st.st_size;
-            else
-                entries[numFiles].size = -1;
-
-            numFiles++;
+        // Skip directories
+        if (entry->d_type == DT_DIR) {
+            continue;
         }
+
+        // Construct the file path
+        char filePath[MAX_FILENAME_LENGTH];
+        snprintf(filePath, sizeof(filePath), "%s/%s", directory, entry->d_name);
+
+        // Open the source file in binary mode
+        FILE* srcFile = fopen(filePath, "rb");
+        if (srcFile == NULL) {
+            printf("Failed to open source file '%s'.\n", filePath);
+            perror("Error");
+            continue;
+        }
+
+        // Get the size of the source file
+        fseek(srcFile, 0, SEEK_END);
+        long size = ftell(srcFile);
+
+        // Create a new file entry
+        FileEntry fileEntry;
+        strncpy(fileEntry.filename, entry->d_name, MAX_FILENAME_LENGTH);
+        fileEntry.offset = ftell(archiveFile);
+        fileEntry.size = size;
+
+        // Write the file entry to the archive file
+        if (fwrite(&fileEntry, sizeof(FileEntry), 1, archiveFile) != 1) {
+            printf("Failed to write file entry to archive file '%s'.\n", archiveFilename);
+            perror("Error");
+            fclose(srcFile);
+            closedir(dir);
+            fclose(archiveFile);
+            return 1;
+        }
+
+        // Reset the file position indicator to the beginning of the source file
+        rewind(srcFile);
+
+        // Copy the contents of the source file to the archive file
+        char buffer[1024];
+        size_t bytesRead;
+        while ((bytesRead = fread(buffer, 1, sizeof(buffer), srcFile)) > 0) {
+            if (fwrite(buffer, 1, bytesRead, archiveFile) != bytesRead) {
+                printf("Failed to write file data to archive file '%s'.\n", archiveFilename);
+                perror("Error");
+                fclose(srcFile);
+                closedir(dir);
+                fclose(archiveFile);
+                return 1;
+            }
+        }
+
+        // Close the source file
+        fclose(srcFile);
+
+        fileCount++;
     }
-
-    // Close the source directory
-    closedir(dir);
-
-    // Write the file entries to the archive file
-    fwrite(entries, sizeof(FileEntry), numFiles, archiveFile);
 
     // Close the archive file
     fclose(archiveFile);
 
-    printf("%d file(s) archived.\n", numFiles);
+    // Close the source directory
+    closedir(dir);
+
+    printf("%d file(s) packed into archive '%s'.\n", fileCount, archiveFilename);
 
     return 0;
 }
 
-int unpack(const char* archiveFilename, const char* destDirectory) {
-    printf("Unpacking files from archive '%s' into directory '%s'\n", archiveFilename, destDirectory);
-
-    // Check if the archive file exists
+int unpack(const char* archiveFilename, const char* directory) {
+    // Open the archive file
     FILE* archiveFile = fopen(archiveFilename, "rb");
     if (archiveFile == NULL) {
-        printf("Archive file '%s' not found.\n", archiveFilename);
+        printf("Failed to open archive file '%s'.\n", archiveFilename);
         perror("Error");
         return 1;
     }
 
     // Create the destination directory if it doesn't exist
-    int status = mkdir(destDirectory, 0777);
-    if (status != 0 && errno != EEXIST) {
-        printf("Failed to create destination directory '%s'.\n", destDirectory);
+    if (mkdir(directory, 0777) != 0 && errno != EEXIST) {
+        printf("Failed to create destination directory '%s'.\n", directory);
         perror("Error");
         fclose(archiveFile);
         return 1;
     }
 
-    // Read the file entries from the archive
-    FileEntry entries[MAX_FILES];
-    int numFiles = fread(entries, sizeof(FileEntry), MAX_FILES, archiveFile);
+    // Read the file entries from the archive file
+    FileEntry fileEntry;
+    int fileCount = 0;
+    while (fread(&fileEntry, sizeof(FileEntry), 1, archiveFile) == 1) {
+        // Create the destination file path
+        char destFilePath[MAX_FILENAME_LENGTH];
+        snprintf(destFilePath, sizeof(destFilePath), "%s/%s", directory, fileEntry.filename);
+
+        // Open the destination file in binary mode
+        FILE* destFile = fopen(destFilePath, "wb");
+        if (destFile == NULL) {
+            printf("Failed to create destination file '%s'.\n", destFilePath);
+            perror("Error");
+            fclose(archiveFile);
+            return 1;
+        }
+
+        // Seek to the file data in the archive file
+        fseek(archiveFile, fileEntry.offset, SEEK_SET);
+
+        // Copy the file data to the destination file
+        char buffer[1024];
+        size_t bytesRead;
+        long bytesRemaining = fileEntry.size;
+        while (bytesRemaining > 0 && (bytesRead = fread(buffer, 1, sizeof(buffer), archiveFile)) > 0) {
+            if (bytesRead > bytesRemaining) {
+                bytesRead = bytesRemaining;
+            }
+            if (fwrite(buffer, 1, bytesRead, destFile) != bytesRead) {
+                printf("Failed to write file data to destination file '%s'.\n", destFilePath);
+                perror("Error");
+                fclose(destFile);
+                fclose(archiveFile);
+                return 1;
+            }
+            bytesRemaining -= bytesRead;
+        }
+
+        // Close the destination file
+        fclose(destFile);
+        fileCount++;
+    }
 
     // Close the archive file
     fclose(archiveFile);
 
-    // Unpack the files to the destination directory
-    for (int i = 0; i < numFiles; i++) {
-        char srcPath[256];
-        snprintf(srcPath, sizeof(srcPath), "%s/%s", archiveFilename, entries[i].filename);
-
-        char destPath[256];
-        snprintf(destPath, sizeof(destPath), "%s/%s", destDirectory, entries[i].filename);
-
-        FILE* srcFile = fopen(srcPath, "rb");
-        if (srcFile == NULL) {
-            printf("Failed to open source file '%s'. Skipping...\n", srcPath);
-            perror("Error");
-            continue;
-        }
-
-        FILE* destFile = fopen(destPath, "wb");
-        if (destFile == NULL) {
-            printf("Failed to create destination file '%s'. Skipping...\n", destPath);
-            perror("Error");
-            fclose(srcFile);
-            continue;
-        }
-
-        // Read and write the file contents
-        char buffer[1024];
-        int bytesRead;
-        while ((bytesRead = fread(buffer, 1, sizeof(buffer), srcFile)) > 0)
-            fwrite(buffer, 1, bytesRead, destFile);
-
-        // Close the source and destination files
-        fclose(srcFile);
-        fclose(destFile);
-
-        printf("Unpacked file '%s'\n", entries[i].filename);
-    }
-
-    printf("%d file(s) unpacked.\n", numFiles);
+    printf("Archive '%s' unpacked to directory '%s'.\n", archiveFilename, directory);
 
     return 0;
 }
-int add(const char* archiveFilename, const char* targetFilename) {
-    printf("Adding file '%s' to archive '%s'\n", targetFilename, archiveFilename);
 
-    // Check if the archive file exists
-    FILE* archiveFile = fopen(archiveFilename, "rb+");
+int add(const char* archiveFilename, const char* filePath) {
+    // Open the archive file in read-write mode
+    FILE* archiveFile = fopen(archiveFilename, "r+b");
     if (archiveFile == NULL) {
-        printf("Archive file '%s' not found.\n", archiveFilename);
+        printf("Failed to open archive file '%s'.\n", archiveFilename);
         perror("Error");
         return 1;
     }
-
-    // Get the file size
-    struct stat st;
-    if (stat(targetFilename, &st) != 0) {
-        printf("Failed to get file size of '%s'.\n", targetFilename);
-        perror("Error");
-        fclose(archiveFile);
-        return 1;
-    }
-    int fileSize = st.st_size;
 
     // Check if the file already exists in the archive
-    FileEntry entry;
-    int found = 0;
-    while (fread(&entry, sizeof(FileEntry), 1, archiveFile) != 0) {
-        if (strcmp(entry.filename, targetFilename) == 0) {
-            printf("File '%s' already exists in the archive. Skipping.\n", targetFilename);
+    FileEntry fileEntry;
+    while (fread(&fileEntry, sizeof(FileEntry), 1, archiveFile) == 1) {
+        if (strcmp(fileEntry.filename, filePath) == 0) {
+            printf("File '%s' already exists in the archive.\n", filePath);
             fclose(archiveFile);
-            return 0;
+            return 1;
         }
     }
 
-    // Open the source file for reading
-    FILE* srcFile = fopen(targetFilename, "rb");
+    // Open the source file in binary mode
+    FILE* srcFile = fopen(filePath, "rb");
     if (srcFile == NULL) {
-        printf("Failed to open source file '%s'.\n", targetFilename);
+        printf("Failed to open source file '%s'.\n", filePath);
         perror("Error");
         fclose(archiveFile);
         return 1;
     }
 
-    // Append the file entry to the archive file
-    fseek(archiveFile, 0, SEEK_END);
-    strncpy(entry.filename, targetFilename, sizeof(entry.filename));
-    entry.size = fileSize;
-    fwrite(&entry, sizeof(FileEntry), 1, archiveFile);
+    // Get the size of the source file
+    fseek(srcFile, 0, SEEK_END);
+    long size = ftell(srcFile);
 
-    // Copy the file contents to the archive
+    // Create a new file entry
+    FileEntry newEntry;
+    strncpy(newEntry.filename, filePath, MAX_FILENAME_LENGTH);
+    newEntry.offset = ftell(archiveFile);
+    newEntry.size = size;
+
+    // Write the new file entry to the archive file
+    if (fwrite(&newEntry, sizeof(FileEntry), 1, archiveFile) != 1) {
+        printf("Failed to write file entry to archive file '%s'.\n", archiveFilename);
+        perror("Error");
+        fclose(srcFile);
+        fclose(archiveFile);
+        return 1;
+    }
+
+    // Reset the file position indicator to the beginning of the source file
+    rewind(srcFile);
+
+    // Copy the contents of the source file to the archive file
     char buffer[1024];
-    int bytesRead;
+    size_t bytesRead;
     while ((bytesRead = fread(buffer, 1, sizeof(buffer), srcFile)) > 0) {
-        fwrite(buffer, 1, bytesRead, archiveFile);
+        if (fwrite(buffer, 1, bytesRead, archiveFile) != bytesRead) {
+            printf("Failed to write file data to archive file '%s'.\n", archiveFilename);
+            perror("Error");
+            fclose(srcFile);
+            fclose(archiveFile);
+            return 1;
+        }
     }
 
     // Close the files
     fclose(srcFile);
     fclose(archiveFile);
 
-    printf("File '%s' added to the archive.\n", targetFilename);
+    printf("File '%s' added to archive '%s'.\n", filePath, archiveFilename);
 
     return 0;
 }
 
-int del(const char* archiveFilename, const char* targetFilename) {
-    printf("Deleting file '%s' from archive '%s'\n", targetFilename, archiveFilename);
-
-    // Check if the archive file exists
-    FILE* archiveFile = fopen(archiveFilename, "rb+");
+int del(const char* archiveFilename, const char* filename) {
+    // Open the archive file in read-write mode
+    FILE* archiveFile = fopen(archiveFilename, "r+b");
     if (archiveFile == NULL) {
-        printf("Archive file '%s' not found.\n", archiveFilename);
+        printf("Failed to open archive file '%s'.\n", archiveFilename);
         perror("Error");
         return 1;
     }
 
-    // Search for the file entry in the archive
-    FileEntry entry;
+    // Read the file entries from the archive file
+    FileEntry fileEntry;
     int found = 0;
-    long offset = 0;
-    while (fread(&entry, sizeof(FileEntry), 1, archiveFile) != 0) {
-        if (strcmp(entry.filename, targetFilename) == 0) {
+    while (fread(&fileEntry, sizeof(FileEntry), 1, archiveFile) == 1) {
+        if (strcmp(fileEntry.filename, filename) == 0) {
             found = 1;
             break;
         }
-        offset = ftell(archiveFile);
     }
 
     if (found) {
-        // Calculate the size of the file contents
-        int fileSize = entry.size;
-
-        // Calculate the offset of the file entry
-        fseek(archiveFile, offset, SEEK_SET);
-
-        // Delete the file entry from the archive
-        FileEntry emptyEntry;
-        memset(&emptyEntry, 0, sizeof(FileEntry));
-        fwrite(&emptyEntry, sizeof(FileEntry), 1, archiveFile);
-
-        // Remove the file contents from the archive
-        fseek(archiveFile, fileSize, SEEK_CUR);
-        char emptyBuffer[1024];
-        memset(&emptyBuffer, 0, sizeof(emptyBuffer));
-        fwrite(emptyBuffer, 1, fileSize, archiveFile);
-
-        printf("File '%s' deleted from the archive.\n", targetFilename);
+        // Remove the file entry from the archive file
+        fseek(archiveFile, -sizeof(FileEntry), SEEK_CUR);
+        memset(&fileEntry, 0, sizeof(FileEntry));
+        if (fwrite(&fileEntry, sizeof(FileEntry), 1, archiveFile) != 1) {
+            printf("Failed to delete file entry from archive file '%s'.\n", archiveFilename);
+            perror("Error");
+            fclose(archiveFile);
+            return 1;
+        }
     } else {
-        printf("File '%s' not found in the archive.\n", targetFilename);
+        printf("File '%s' not found in the archive.\n", filename);
+        fclose(archiveFile);
+        return 1;
     }
 
     // Close the archive file
     fclose(archiveFile);
 
+    printf("File '%s' deleted from archive '%s'.\n", filename, archiveFilename);
+
     return 0;
 }
 
+int list(const char* archiveFilename) {
+    // Open the archive file in read mode
+    FILE* archiveFile = fopen(archiveFilename, "rb");
+    if (archiveFile == NULL) {
+        printf("Failed to open archive file '%s'.\n", archiveFilename);
+        perror("Error");
+        return 1;
+    }
+
+    // Read the file entries from the archive file
+    FileEntry fileEntry;
+    int fileCount = 0;
+    while (fread(&fileEntry, sizeof(FileEntry), 1, archiveFile) == 1) {
+        printf("File: %s, Size: %ld bytes\n", fileEntry.filename, fileEntry.size);
+        fileCount++;
+    }
+
+    // Close the archive file
+    fclose(archiveFile);
+
+    printf("Total files in archive '%s': %d\n", archiveFilename, fileCount);
+
+    return 0;
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 3) {
+        printf("Usage: %s <command> <archive-filename> [arguments...]\n", argv[0]);
+        return 1;
+    }
+
+    const char* command = argv[1];
+    const char* archiveFilename = argv[2];
+
+    if (strcmp(command, "pack") == 0) {
+        if (argc < 4) {
+            printf("Usage: %s pack <archive-filename> <src-directory>\n", argv[0]);
+            return 1;
+        }
+
+        const char* srcDirectory = argv[3];
+        pack(archiveFilename, srcDirectory);
+    } else if (strcmp(command, "unpack") == 0) {
+        if (argc < 4) {
+            printf("Usage: %s unpack <archive-filename> <dest-directory>\n", argv[0]);
+            return 1;
+        }
+
+        const char* destDirectory = argv[3];
+        unpack(archiveFilename, destDirectory);
+    } else if (strcmp(command, "add") == 0) {
+        if (argc < 4) {
+            printf("Usage: %s add <archive-filename> <file-path>\n", argv[0]);
+            return 1;
+        }
+
+        const char* filePath = argv[3];
+        add(archiveFilename, filePath);
+    } else if (strcmp(command, "del") == 0) {
+        if (argc < 4) {
+            printf("Usage: %s del <archive-filename> <file-name>\n", argv[0]);
+            return 1;
+        }
+
+        const char* fileName = argv[3];
+        del(archiveFilename, fileName);
+    } else if (strcmp(command, "list") == 0) {
+        list(archiveFilename);
+    } else {
+        printf("Unknown command '%s'.\n", command);
+        return 1;
+    }
+
+    return 0;
+}
