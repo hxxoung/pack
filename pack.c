@@ -3,20 +3,20 @@
 #include <sys/stat.h>
 
 int main() {
-    const char* new1 = "/home/yun/sysmp_assignment2/part2";
+    const char* directory = "/path/to/location/new1";
 
     struct stat st;
-    if (stat(new1, &st) == 0) {
-        printf("There is a file with the same name.\n");
+    if (stat(directory, &st) == 0) {
+        printf("There is a file with the same name named 'new1'.\n");
         return 1;
     }
 
-    int status = mkdir(new1, 0777);
+    int status = mkdir(directory, 0777);
 
     if (status == 0) {
-        printf("Directory '%s' created successfully.\n", new1);
+        printf("Directory 'new1' created successfully at the specified location.\n");
     } else {
-        printf("Failed to create directory '%s'.\n", new1);
+        printf("Failed to create directory 'new1' at the specified location.\n");
         perror("Error");
         return 1;
     }
