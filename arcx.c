@@ -96,28 +96,25 @@ int unpack(const char* archiveFilename, const char* destDirectory) {
     // Close the archive file
     fclose(archiveFile);
 
-    // Unpack the files
+    // Unpack the files to the destination directory
     for (int i = 0; i < numFiles; i++) {
-        const char* filename = entries[i].filename;
-        int fileSize = entries[i].size;
-
-        // Generate the source file path and destination file path
         char srcPath[256];
-        snprintf(srcPath, sizeof(srcPath), "%s/%s", destDirectory, filename);
-        char destPath[256];
-        snprintf(destPath, sizeof(destPath), "%s/%s", destDirectory, filename);
+        snprintf(srcPath, sizeof(srcPath), "%s/%s", archiveFilename, entries[i].filename);
 
-        // Open the source file for reading
+        char destPath[256];
+        snprintf(destPath, sizeof(destPath), "%s/%s", destDirectory, entries[i].filename);
+
         FILE* srcFile = fopen(srcPath, "rb");
         if (srcFile == NULL) {
-            printf("Failed to open source file '%s'. Skipping.\n", srcPath);
+            printf("Failed to open source file '%s'. Skipping...\n", srcPath);
+            perror("Error");
             continue;
         }
 
-        // Open the destination file for writing
         FILE* destFile = fopen(destPath, "wb");
         if (destFile == NULL) {
-            printf("Failed to create destination file '%s'. Skipping.\n", destPath);
+            printf("Failed to create destination file '%s'. Skipping...\n", destPath);
+            perror("Error");
             fclose(srcFile);
             continue;
         }
@@ -125,30 +122,20 @@ int unpack(const char* archiveFilename, const char* destDirectory) {
         // Read and write the file contents
         char buffer[1024];
         int bytesRead;
-        int totalBytes = 0;
-        while ((bytesRead = fread(buffer, 1, sizeof(buffer), srcFile)) > 0) {
+        while ((bytesRead = fread(buffer, 1, sizeof(buffer), srcFile)) > 0)
             fwrite(buffer, 1, bytesRead, destFile);
-            totalBytes += bytesRead;
-        }
 
-        // Close the files
+        // Close the source and destination files
         fclose(srcFile);
         fclose(destFile);
 
-        // Verify the file size
-        if (fileSize != -1 && totalBytes != fileSize) {
-            printf("Unpacking file '%s' failed. File size mismatch.\n", filename);
-            remove(destPath); // Remove the partially unpacked file
-        } else {
-            printf("Unpacked file '%s' (%d bytes).\n", filename, totalBytes);
-        }
+        printf("Unpacked file '%s'\n", entries[i].filename);
     }
 
-    printf("Unpacking completed.\n");
+    printf("%d file(s) unpacked.\n", numFiles);
 
     return 0;
 }
-
 int add(const char* archiveFilename, const char* targetFilename) {
     printf("Adding file '%s' to archive '%s'\n", targetFilename, archiveFilename);
 
@@ -258,33 +245,3 @@ int del(const char* archiveFilename, const char* targetFilename) {
     return 0;
 }
 
-int main(int argc, char* argv[]) {
-    if (argc < 3) {
-        printf("Usage:\n");
-        printf("To pack: %s pack archive-filename src-directory\n", argv[0]);
-        printf("To unpack: %s unpack archive-filename dest-directory\n", argv[0]);
-        printf("To add: %s add archive-filename target-filename\n", argv[0]);
-        printf("To delete: %s del archive-filename target-filename\n", argv[0]);
-        return 1;
-    }
-
-    const char* command = argv[1];
-    const char* archiveFilename = argv[2];
-
-    if (strcmp(command, "pack") == 0) {
-        const char* srcDirectory = argv[3];
-        return pack(archiveFilename, srcDirectory);
-    } else if (strcmp(command, "unpack") == 0) {
-        const char* destDirectory = argv[3];
-        return unpack(archiveFilename, destDirectory);
-    } else if (strcmp(command, "add") == 0) {
-        const char* targetFilename = argv[3];
-        return add(archiveFilename, targetFilename);
-    } else if (strcmp(command, "del") == 0) {
-        const char* targetFilename = argv[3];
-        return del(archiveFilename, targetFilename);
-    } else {
-        printf("Invalid command.\n");
-        return 1;
-    }
-}
